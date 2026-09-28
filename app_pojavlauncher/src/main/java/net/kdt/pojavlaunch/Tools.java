@@ -146,9 +146,12 @@ public final class Tools {
     public static String CTRLMAP_PATH;
     public static String CTRLDEF_FILE;
     private static RenderersList sCompatibleRenderers;
+    public static boolean useSFPEW = true;
+    public static boolean useANGLE = false;
     public static int iLwjglVersion = 0;
     public static String sLwjglVersion = null;
     public static String lwjglNativesDir = null;
+    public static String[] sAsmVersion = null;
 
 
     private static File getPojavStorageRoot(Context ctx) {
@@ -277,15 +280,30 @@ public final class Tools {
      * @return Whether or not the .jar is found
      */
     public static boolean hasMods(String... filenames) {
+        return !getMods(filenames).isEmpty();
+    }
+
+    /**
+     * Searches for mod in mods directory of current selected profile
+     * Not case-sensitive
+     * @param filenames Filename(s) of the .jar mod(s)
+     * @return The found mods
+     */
+    public static List<File> getMods(String... filenames) {
         File gameDir = getGameDir();
         File modsDir = new File(gameDir, "mods");
-        File[] modFiles = modsDir.listFiles(file -> file.isFile() && file.getName().endsWith(".jar"));
-        if (modFiles == null) return false;
+        File[] modFiles = modsDir.listFiles(file -> file.isFile() && file.getName().toLowerCase().endsWith(".jar"));
+        if (modFiles == null) return new ArrayList<>();
+        List<File> foundModFiles = new ArrayList<>();
         for (File file : modFiles) {
             for (String filename : filenames)
-                if (file.getName().toLowerCase().contains(filename.toLowerCase())) return true;
+                if (file.getName().toLowerCase().contains(filename.toLowerCase()) &&
+                        file.getName().toLowerCase().endsWith(".jar")) {
+                    foundModFiles.add(file);
+                    break;
+                }
         }
-        return false;
+        return foundModFiles;
     }
 
     /**
@@ -898,8 +916,9 @@ public final class Tools {
 
         File[] lwjglModules = lwjgl3Folder.listFiles(pathname ->
                 pathname.getName().endsWith(".jar") &&
-            // Exclude our two special jars which goes first and last
+                // Exclude our three special jars which goes first, second and last
                 !pathname.getName().equals("lwjgl.jar") &&
+                !pathname.getName().equals("lwjgl-"+internalLwjglVersion+"-merged-modules.jar") &&
                 !pathname.getName().endsWith("lwjglx.jar"));
 
         if (lwjglModules != null) {
@@ -1147,11 +1166,12 @@ public final class Tools {
     public static void preProcessLibraries(DependentLibrary[] libraries) {
         for (int i = 0; i < libraries.length; i++) {
             DependentLibrary libItem = libraries[i];
-            String[] version = libItem.name.split(":")[2].split("\\.");
+            String libraryVersion = libItem.name.split(":")[2];
+            String[] libraryVersionArray = libraryVersion.split("\\.");
             if (libItem.name.startsWith("net.java.dev.jna:jna:")) {
                 // Special handling for LabyMod 1.8.9, Forge 1.12.2(?) and oshi
                 // we have libjnidispatch 5.13.0 in jniLibs directory
-                if (Integer.parseInt(version[0]) >= 5 && Integer.parseInt(version[1]) >= 13) continue;
+                if (Integer.parseInt(libraryVersionArray[0]) >= 5 && Integer.parseInt(libraryVersionArray[1]) >= 13) continue;
                 Log.d(APP_NAME, "Library " + libItem.name + " has been changed to version 5.13.0");
                 createLibraryInfo(libItem);
                 libItem.name = "net.java.dev.jna:jna:5.13.0";
@@ -1162,7 +1182,7 @@ public final class Tools {
                 //if (Integer.parseInt(version[0]) >= 6 && Integer.parseInt(version[1]) >= 3) return;
                 // FIXME: ensure compatibility
 
-                if (Integer.parseInt(version[0]) != 6 || Integer.parseInt(version[1]) != 2) continue;
+                if (Integer.parseInt(libraryVersionArray[0]) != 6 || Integer.parseInt(libraryVersionArray[1]) != 2) continue;
                 Log.d(APP_NAME, "Library " + libItem.name + " has been changed to version 6.3.0");
                 createLibraryInfo(libItem);
                 libItem.name = "com.github.oshi:oshi-core:6.3.0";
@@ -1173,7 +1193,8 @@ public final class Tools {
                 // Early versions of the ASM library get repalced with 5.0.4 because Pojav's LWJGL is compiled for
                 // Java 8, which is not supported by old ASM versions. Mod loaders like Forge, which depend on this
                 // library, often include lwjgl in their class transformations, which causes errors with old ASM versions.
-                if(Integer.parseInt(version[0]) >= 5) continue;
+                sAsmVersion = libraryVersionArray;
+                if(Integer.parseInt(libraryVersionArray[0]) >= 5) continue;
                 Log.d(APP_NAME, "Library " + libItem.name + " has been changed to version 5.0.4");
                 createLibraryInfo(libItem);
                 libItem.name = "org.ow2.asm:asm-all:5.0.4";
@@ -1181,6 +1202,10 @@ public final class Tools {
                 libItem.downloads.artifact.path = "org/ow2/asm/asm-all/5.0.4/asm-all-5.0.4.jar";
                 libItem.downloads.artifact.sha1 = "e6244859997b3d4237a552669279780876228909";
                 libItem.downloads.artifact.url = "https://repo1.maven.org/maven2/org/ow2/asm/asm-all/5.0.4/asm-all-5.0.4.jar";
+            }
+            if (sAsmVersion == null && libItem.name.startsWith("org.ow2.asm:asm")) {
+                // TODO: Extract logic for iLwjglVersion and copy it here
+                sAsmVersion = libraryVersionArray;
             }
         }
     }
@@ -1733,6 +1758,7 @@ public final class Tools {
         boolean deviceHasOpenGLES3 = JREUtils.getDetectedVersion() >= 3;
         // LTW is an optional proprietary dependency
         boolean appHasLtw = new File(Tools.NATIVE_LIB_DIR, "libltw.so").exists();
+        boolean appHasKw = new File(Tools.NATIVE_LIB_DIR, "libng_gl4es.so").exists();
         List<String> rendererIds = new ArrayList<>(defaultRenderers.length);
         List<String> rendererNames = new ArrayList<>(defaultRendererNames.length);
         for(int i = 0; i < defaultRenderers.length; i++) {
@@ -1740,6 +1766,7 @@ public final class Tools {
             if(rendererId.contains("vulkan") && !deviceHasVulkan) continue;
             if(rendererId.contains("vulkan_zink") && !deviceHasOSMesaZinkBinary) continue;
             if(rendererId.contains("ltw") && (!deviceHasOpenGLES3 || !appHasLtw)) continue;
+            if(rendererId.contains("opengles2") && (!deviceHasOpenGLES3 || !appHasKw)) continue;
             rendererIds.add(rendererId);
             rendererNames.add(defaultRendererNames[i]);
         }
@@ -1906,7 +1933,7 @@ public final class Tools {
         return motionListener;
     }
 
-    static class SDL {
+    public static class SDL {
         /**
          * Initializes gamepad, joystick, and event subsystems.
          * This triggers {@link SDLControllerManager#pollInputDevices()} and subsequently disables
@@ -1914,4 +1941,6 @@ public final class Tools {
          */
         public static native void initializeControllerSubsystems();
     }
+    public static native String jObjectToString(Object object);
+    public static native long getJavaVMPointer();
 }

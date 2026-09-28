@@ -127,6 +127,7 @@ public class MainActivity extends BaseActivity implements ControlButtonMenuListe
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
 
         minecraftProfile = LauncherProfiles.getCurrentProfile();
+        Tools.useANGLE = minecraftProfile.useANGLE;
 
         String gameDirPath = Tools.getGameDirPath(minecraftProfile).getAbsolutePath();
         MCOptionUtils.load(gameDirPath);
@@ -140,6 +141,9 @@ public class MainActivity extends BaseActivity implements ControlButtonMenuListe
 
         if (Tools.hasTouchController(new File(gameDirPath)) || LauncherPreferences.PREF_FORCE_ENABLE_TOUCHCONTROLLER) {
             TouchControllerUtils.initialize(this, touchControllerInputView);
+        }
+        if (LauncherPreferences.PREF_GAMEPAD_FORCEDSDL_PASSTHRU) {
+            CallbackBridge.notifyLauncher(CallbackBridge.NOTIF_TYPE_SDL, CallbackBridge.ACTION_INIT_LAUNCHER_INTEGRATION);
         }
 
         mGyroControl = new GyroControl(this);
@@ -452,26 +456,21 @@ public class MainActivity extends BaseActivity implements ControlButtonMenuListe
 
         // FIXME: Automatic detection should be based on provided hint GLFW_CONTEXT_VERSION_MAJOR and GLFW_CONTEXT_VERSION_MINOR
         // Autoselect renderer
-        if (Tools.LOCAL_RENDERER == null) {
-            // Preferably we could detect when it is modded and swap to zink however that would also
-            // cover optifine and vanilla+ configurations which are relatively common, degrading their
-            // experience for no reason. We will compromise with just having users do it themselves.
-            Tools.LOCAL_RENDERER = "opengles2";
-            // MobileGlues becomes available post 1.17. It has superior compatibility with mods
-            // while having fairly similar performance compared to GL4ES-based forks.
-            if(assetVersion.matches("\\d+") || // Should match all digits, which is the modern assetVersioning
-               "1.17".equals(assetVersion) ||
-               "1.18".equals(assetVersion) ||
-               "1.19".equals(assetVersion) ||
-                // Angelica gives us GL3.3core on 1.7.10, it's a unique case.
-                hasMods("angelica")) Tools.LOCAL_RENDERER = "opengles_mobileglues";
-        }
+        boolean hasAngelica = hasMods("angelica");
+        if (Tools.LOCAL_RENDERER == null) Tools.LOCAL_RENDERER = "opengles_mobileglues";
+        // Angelica IS the FPE emulator
+        if (hasAngelica) Tools.useSFPEW = false;
+
+        // TODO: Detection for if a mod is present that can use system GLES as driver, set
+        // Tools.LOCAL_RENDERER = "opengles_system_gles";
+
+        // This only happens if an old renderer that was selected is removed. Uses renderer_values
+        // as the list of priority to use, highest to lowest.
         if(!Tools.checkRendererCompatible(this, Tools.LOCAL_RENDERER)) {
             Tools.RenderersList renderersList = Tools.getCompatibleRenderers(this);
             String firstCompatibleRenderer = renderersList.rendererIds.get(0);
-            Log.w("runCraft","Incompatible renderer "+Tools.LOCAL_RENDERER+ " will be replaced with "+firstCompatibleRenderer);
+            Log.i("runCraft","Missing renderer "+Tools.LOCAL_RENDERER+ " will be replaced with "+firstCompatibleRenderer);
             Tools.LOCAL_RENDERER = firstCompatibleRenderer;
-            runOnUiThread(() -> Toast.makeText(this, R.string.autorendererselectfailed, Toast.LENGTH_LONG).show());
             Tools.releaseRenderersCache();
         }
 
@@ -499,6 +498,10 @@ public class MainActivity extends BaseActivity implements ControlButtonMenuListe
         Tools.launchMinecraft(this, minecraftAccount, minecraftProfile, versionId, requiredJavaVersion);
         //Note that we actually stall in the above function, even if the game crashes. But let's be safe.
         Tools.runOnUiThread(()-> mServiceBinder.isActive = false);
+    }
+
+    public void setmLastIndex(int a){
+        mHotbarView.setmLastIndex(a);
     }
 
     private void dialogSendCustomKey() {
